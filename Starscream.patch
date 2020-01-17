@@ -1,0 +1,46 @@
+###############################################################################
+#   
+#   Pvtbox. Fast and secure file transfer & sync directly across your devices. 
+#   Copyright © 2020  Pb Private Cloud Solutions Ltd. 
+#   
+#   This program is free software: you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License as published by
+#   the Free Software Foundation, either version 3 of the License, or
+#   (at your option) any later version.
+#   
+#   This program is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#   GNU General Public License for more details.
+#   
+#   You should have received a copy of the GNU General Public License
+#   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#   
+###############################################################################
+
+--- Pods/Starscream/Sources/Starscream/WebSocket.swift
++++ Pods/Starscream/Sources/Starscream/WebSocket.swift
+@@ -320,6 +320,7 @@
+ //got pongs
+ public protocol WebSocketPongDelegate: class {
+     func websocketDidReceivePong(socket: WebSocketClient, data: Data?)
++    func websocketDidReceivePing(socket: WebSocketClient, data: Data?)
+ }
+ 
+ // A Delegate with more advanced info on messages and connection etc.
+@@ -1166,8 +1167,14 @@
+     private func processResponse(_ response: WSResponse) -> Bool {
+         if response.isFin && response.bytesLeft <= 0 {
+             if response.code == .ping {
++                let data = response.buffer! // local copy so it is perverse for writing
++                if canDispatch {
++                    callbackQueue.async { [weak self] in
++                        guard let self = self else { return }
++                        self.pongDelegate?.websocketDidReceivePing(socket: self, data: data as Data?)
++                    }
++                }
+                 if respondToPingWithPong {
+-                    let data = response.buffer! // local copy so it is perverse for writing
+                     dequeueWrite(data as Data, code: .pong)
+                 }
+             } else if response.code == .textFrame {

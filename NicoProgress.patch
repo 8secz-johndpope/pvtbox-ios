@@ -1,0 +1,51 @@
+###############################################################################
+#   
+#   Pvtbox. Fast and secure file transfer & sync directly across your devices. 
+#   Copyright © 2020  Pb Private Cloud Solutions Ltd. 
+#   
+#   This program is free software: you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License as published by
+#   the Free Software Foundation, either version 3 of the License, or
+#   (at your option) any later version.
+#   
+#   This program is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#   GNU General Public License for more details.
+#   
+#   You should have received a copy of the GNU General Public License
+#   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#   
+###############################################################################
+
+--- Pods/NicoProgress/NicoProgress/Classes/NicoProgressBar.swift
++++ Pods/NicoProgress/NicoProgress/Classes/NicoProgressBar.swift
+@@ -131,6 +131,7 @@
+     }
+     
+     private func runIndeterminateAnimationLoop(delay: TimeInterval = 0) {
++        guard let s = superview, let sw = s.window, let w = window else { return }
+         moveProgressBarIndicatorToStart()
+         
+         UIView.animateKeyframes(withDuration: indeterminateAnimationDuration, delay: delay, options: [], animations: {
+@@ -140,11 +141,18 @@
+             UIView.addKeyframe(withRelativeStartTime: self.indeterminateAnimationDuration/2, relativeDuration: self.indeterminateAnimationDuration/2, animations: {
+                 self.progressBarIndicator.frame = CGRect(x: self.bounds.width, y: 0, width: self.bounds.width * 0.3, height: self.bounds.size.height)
+             })
+-        }) { [weak self] _ in
++        }) { [weak self] res in
+             guard let strongSelf = self else { return }
+             
+             if strongSelf.isIndeterminateAnimationRunning {
+-                strongSelf.runIndeterminateAnimationLoop()
++                if res {
++                    strongSelf.runIndeterminateAnimationLoop()
++                } else {
++                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
++                        [weak self] in
++                        self?.runIndeterminateAnimationLoop()
++                    }
++                }
+             }
+         }
+     }

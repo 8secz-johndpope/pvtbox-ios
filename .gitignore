@@ -1,0 +1,9 @@
+DerivedData
+.DS_STORE
+Podfile.lock
+Pods
+Pvtbox.xcworkspace/
+Pvtbox.xcodeproj/xcuserdata
+
+Pvtbox/Bugfender+key.swift
+Pvtbox/Services/Network/proto.pb.swift

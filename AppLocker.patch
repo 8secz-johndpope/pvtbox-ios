@@ -1,0 +1,924 @@
+###############################################################################
+#   
+#   Pvtbox. Fast and secure file transfer & sync directly across your devices. 
+#   Copyright © 2020  Pb Private Cloud Solutions Ltd. 
+#   
+#   This program is free software: you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License as published by
+#   the Free Software Foundation, either version 3 of the License, or
+#   (at your option) any later version.
+#   
+#   This program is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#   GNU General Public License for more details.
+#   
+#   You should have received a copy of the GNU General Public License
+#   along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#   
+###############################################################################
+
+--- Pods/AppLocker/Source/AppLocker/AppLocker.swift
++++ Pods/AppLocker/Source/AppLocker/AppLocker.swift
+@@ -9,239 +9,393 @@
+ import UIKit
+ import AudioToolbox
+ import LocalAuthentication
++import Valet
+ 
+-public enum ALConstants {
+-  static let nibName = "AppLocker"
+-  static let kPincode = "pincode" // Key for saving pincode to UserDefaults
+-  static let kLocalizedReason = "Unlock with sensor" // Your message when sensors must be shown
+-  static let duration = 0.3 // Duration of indicator filling
+-  static let maxPinLength = 4
+-  
+-  enum button: Int {
+-    case delete = 1000
+-    case cancel = 1001
+-  }
++internal enum ALConstants {
++    static let kPincode = "pincode" // Key for saving pincode to keychain
++    static let kLocalizedReason = "Unlock with biometric" // Your message when sensors must be shown
++    static let duration = 0.3 // Duration of indicator filling
++    static let maxPinLength = 4
++    
++    enum button: Int {
++        case delete = 1000
++        case cancel = 1001
++    }
++    
++    static func getNibName(forType type: PinCodeType) -> String {
++        switch type {
++        case .numeric:
++            return "AppLocker"
++        case .alphanumeric:
++            return "AppLocker-Alphanumeric"
++        }
++    }
++}
++
++public enum PinCodeType {
++    case numeric
++    case alphanumeric
+ }
+ 
+ public struct ALAppearance { // The structure used to display the controller
+-  public var title: String?
+-  public var subtitle: String?
+-  public var image: UIImage?
+-  public var color: UIColor?
+-  public var isSensorsEnabled: Bool?
+-  public init() {}
++    public var title: String?
++    public var subtitle: String?
++    public var image: UIImage?
++    public var backgroundColor: UIColor?
++    public var foregroundColor: UIColor?
++    public var hightlightColor: UIColor?
++    public var isSensorsEnabled: Bool?
++    public var pincodeType: PinCodeType = .numeric
++    public init() {}
+ }
+ 
+ public enum ALMode { // Modes for AppLocker
+-  case validate
+-  case change
+-  case deactive
+-  case create
++    case validate
++    case change
++    case deactive
++    case create
+ }
+ 
+ public class AppLocker: UIViewController {
+-  
+-  // MARK: - Top view
+-  @IBOutlet weak var photoImageView: UIImageView!
+-  @IBOutlet weak var messageLabel: UILabel!
+-  @IBOutlet weak var submessageLabel: UILabel!
+-  @IBOutlet var pinIndicators: [Indicator]!
+-  
+-  @IBOutlet weak var cancelButton: UIButton!
+-  
+-  // MARK: - Pincode
+-  private let context = LAContext()
+-  private var pin = "" // Entered pincode
+-  private var reservedPin = "" // Reserve pincode for confirm
+-  private var isFirstCreationStep = true
+-  private var savedPin: String? {
+-    get {
+-      return UserDefaults.standard.string(forKey: ALConstants.kPincode)
+-    }
+-    set {
+-      UserDefaults.standard.set(newValue, forKey: ALConstants.kPincode)
+-    }
+-  }
+-  
+-  fileprivate var mode: ALMode? {
+-    didSet {
+-      let mode = self.mode ?? .validate
+-      switch mode {
+-      case .create:
+-        submessageLabel.text = "Create your passcode" // Your submessage for create mode
+-      case .change:
+-        submessageLabel.text = "Enter your passcode" // Your submessage for change mode
+-      case .deactive:
+-        submessageLabel.text = "Enter your passcode" // Your submessage for deactive mode
+-      case .validate:
+-        submessageLabel.text = "Enter your passcode" // Your submessage for validate mode
+-        cancelButton.isHidden = true
+-        isFirstCreationStep = false
+-      }
+-    }
+-  }
+-  
+-  private func precreateSettings () { // Precreate settings for change mode
+-    mode = .create
+-    clearView()
+-  }
+-  
+-  private func drawing(isNeedClear: Bool, tag: Int? = nil) { // Fill or cancel fill for indicators
+-    let results = pinIndicators.filter { $0.isNeedClear == isNeedClear }
+-    let pinView = isNeedClear ? results.last : results.first
+-    pinView?.isNeedClear = !isNeedClear
+-    
+-    UIView.animate(withDuration: ALConstants.duration, animations: {
+-      pinView?.backgroundColor = isNeedClear ? .clear : .white
+-    }) { _ in
+-      isNeedClear ? self.pin = String(self.pin.dropLast()) : self.pincodeChecker(tag ?? 0)
+-    }
+-  }
+-  
+-  private func pincodeChecker(_ pinNumber: Int) {
+-    if pin.count < ALConstants.maxPinLength {
+-      pin.append("\(pinNumber)")
+-      if pin.count == ALConstants.maxPinLength {
+-        switch mode ?? .validate {
+-        case .create:
+-          createModeAction()
+-        case .change:
+-          changeModeAction()
+-        case .deactive:
+-          deactiveModeAction()
+-        case .validate:
+-          validateModeAction()
+-        }
+-      }
+-    }
+-  }
+-  
+-  // MARK: - Modes
+-  private func createModeAction() {
+-    if isFirstCreationStep {
+-      isFirstCreationStep = false
+-      reservedPin = pin
+-      clearView()
+-      submessageLabel.text = "Confirm your pincode"
+-    } else {
+-      confirmPin()
+-    }
+-  }
+-  
+-  private func changeModeAction() {
+-    pin == savedPin ? precreateSettings() : incorrectPinAnimation()
+-  }
+-  
+-  private func deactiveModeAction() {
+-    pin == savedPin ? removePin() : incorrectPinAnimation()
+-  }
+-  
+-  private func validateModeAction() {
+-    pin == savedPin ? dismiss(animated: true, completion: nil) : incorrectPinAnimation()
+-  }
+-  
+-  private func removePin() {
+-    UserDefaults.standard.removeObject(forKey: ALConstants.kPincode)
+-    dismiss(animated: true, completion: nil)
+-  }
+-  
+-  private func confirmPin() {
+-    if pin == reservedPin {
+-      savedPin = pin
+-      dismiss(animated: true, completion: nil)
+-    } else {
+-      incorrectPinAnimation()
+-    }
+-  }
+-  
+-  private func incorrectPinAnimation() {
+-    pinIndicators.forEach { view in
+-      view.shake(delegate: self)
+-      view.backgroundColor = .clear
+-    }
+-    AudioServicesPlayAlertSound(SystemSoundID(kSystemSoundID_Vibrate))
+-  }
+-  
+-  fileprivate func clearView() {
+-    pin = ""
+-    pinIndicators.forEach { view in
+-      view.isNeedClear = false
+-      UIView.animate(withDuration: ALConstants.duration, animations: {
+-        view.backgroundColor = .clear
+-      })
+-    }
+-  }
+-  
+-  // MARK: - Touch ID / Face ID
+-  fileprivate func checkSensors() {
+-    guard mode == .validate else {return}
+-    
+-    var policy: LAPolicy = .deviceOwnerAuthenticationWithBiometrics // iOS 8+ users with Biometric and Custom (Fallback button) verification
+-    
+-    // Depending the iOS version we'll need to choose the policy we are able to use
+-    if #available(iOS 9.0, *) {
+-      // iOS 9+ users with Biometric and Passcode verification
+-      policy = .deviceOwnerAuthentication
+-    }
+-    
+-    var err: NSError?
+-    // Check if the user is able to use the policy we've selected previously
+-    guard context.canEvaluatePolicy(policy, error: &err) else {return}
+-    
+-    // The user is able to use his/her Touch ID / Face ID 👍
+-    context.evaluatePolicy(policy, localizedReason: ALConstants.kLocalizedReason, reply: {  success, error in
+-      if success {
+-        self.dismiss(animated: true, completion: nil)
+-      }
+-    })
+-  }
+-  
+-  // MARK: - Keyboard
+-  @IBAction func keyboardPressed(_ sender: UIButton) {
+-    switch sender.tag {
+-    case ALConstants.button.delete.rawValue:
+-      drawing(isNeedClear: true)
+-    case ALConstants.button.cancel.rawValue:
+-      clearView()
+-      dismiss(animated: true, completion: nil)
+-    default:
+-      drawing(isNeedClear: false, tag: sender.tag)
++    
++    // MARK: - Top view
++    @IBOutlet weak var photoImageView: UIImageView!
++    @IBOutlet weak var messageLabel: UILabel!
++    @IBOutlet weak var submessageLabel: UILabel!
++    @IBOutlet var pinIndicators: [Indicator]!
++    @IBOutlet var pinNumbers: [RoundedButton]!
++    @IBOutlet weak var cancelButton: UIButton!
++    @IBOutlet weak var deleteButton: UIButton!
++    
++    static let valet = Valet.valet(with: Identifier(nonEmpty: "PrivateBox")!, accessibility: .whenUnlockedThisDeviceOnly)
++    // MARK: - Pincode
++    private let context = LAContext()
++    private var pin = "" // Entered pincode
++    private var reservedPin = "" // Reserve pincode for confirm
++    private var isFirstCreationStep = true
++    private static var sensorCanceled = false
++    private var pinCodeType: PinCodeType = .numeric
++    fileprivate static var savedPin: String? {
++        get {
++            return AppLocker.valet.string(forKey: ALConstants.kPincode)
++        }
++        set {
++            guard let newValue = newValue else { return }
++            AppLocker.valet.set(string: newValue, forKey: ALConstants.kPincode)
++        }
++    }
++    
++    fileprivate var mode: ALMode? {
++        didSet {
++            let mode = self.mode ?? .validate
++            switch mode {
++            case .create:
++                submessageLabel.text = "Create your passcode" // Your submessage for create mode
++            case .change:
++                submessageLabel.text = "Enter your passcode" // Your submessage for change mode
++            case .deactive:
++                submessageLabel.text = "Enter your passcode" // Your submessage for deactive mode
++            case .validate:
++                submessageLabel.text = "Enter your passcode" // Your submessage for validate mode
++                cancelButton.isHidden = true
++                isFirstCreationStep = false
++            }
++        }
++    }
++    
++    fileprivate var completion: (() -> ())? = nil
++    
++    public override func viewDidAppear(_ animated: Bool) {
++        super.viewDidAppear(animated)
++        
++        if pinCodeType == .alphanumeric {
++            let tapGesture = UITapGestureRecognizer(target: self, action: #selector(onTap))
++            self.view.addGestureRecognizer(tapGesture)
++            self.view.isUserInteractionEnabled = true
++            self.becomeFirstResponder()
++        }
++    }
++    
++    public override func viewWillDisappear(_ animated: Bool) {
++        super.viewWillDisappear(animated)
++        self.view.gestureRecognizers?.forEach(self.view.removeGestureRecognizer)
++    }
++    
++    @objc fileprivate func onTap() {
++        if pinCodeType == .alphanumeric {
++            self.becomeFirstResponder()
++        }
++    }
++    
++    private func precreateSettings () { // Precreate settings for change mode
++        mode = .create
++        clearView()
++    }
++    
++    private func drawing(isNeedClear: Bool, tag: String? = nil) { // Fill or cancel fill for indicators
++        let results = pinIndicators.filter { $0.isNeedClear == isNeedClear }
++        let pinView = isNeedClear ? results.last : results.first
++        pinView?.isNeedClear = !isNeedClear
++        
++        UIView.animate(withDuration: ALConstants.duration, animations: {
++            pinView?.backgroundColor = isNeedClear ? .clear : pinView?.highlightedBackgroundColor
++        }) { _ in
++            isNeedClear ? self.pin = String(self.pin.dropLast()) : self.pincodeChecker(tag ?? "0")
++        }
++    }
++    
++    private func pincodeChecker(_ pinNumber: String) {
++        if pin.count < ALConstants.maxPinLength {
++            pin.append(pinNumber)
++            if pin.count == ALConstants.maxPinLength {
++                switch mode ?? .validate {
++                case .create:
++                    createModeAction()
++                case .change:
++                    changeModeAction()
++                case .deactive:
++                    deactiveModeAction()
++                case .validate:
++                    validateModeAction()
++                }
++            }
++        }
++    }
++    
++    // MARK: - Modes
++    private func createModeAction() {
++        if isFirstCreationStep {
++            isFirstCreationStep = false
++            reservedPin = pin
++            clearView()
++            submessageLabel.text = "Confirm your pincode"
++        } else {
++            confirmPin()
++        }
++    }
++    
++    private func changeModeAction() {
++        pin == AppLocker.savedPin ? precreateSettings() : incorrectPinAnimation()
++    }
++    
++    private func deactiveModeAction() {
++        pin == AppLocker.savedPin ? removePin() : incorrectPinAnimation()
++    }
++    
++    private func validateModeAction() {
++        pin == AppLocker.savedPin ? dismiss(animated: true, completion: self.completion) : incorrectPinAnimation()
++    }
++    
++    private func removePin() {
++        AppLocker.removePinFromValet()
++        dismiss(animated: true, completion: self.completion)
+     }
+-  }
+-  
++    
++    public static func removePinFromValet() {
++        AppLocker.valet.removeObject(forKey: ALConstants.kPincode)
++    }
++    
++    private func confirmPin() {
++        if pin == reservedPin {
++            AppLocker.savedPin = pin
++            dismiss(animated: true, completion: self.completion)
++        } else {
++            incorrectPinAnimation()
++        }
++    }
++    
++    private func incorrectPinAnimation() {
++        pinIndicators.forEach { view in
++            view.shake(delegate: self)
++            view.backgroundColor = .clear
++        }
++        AudioServicesPlayAlertSound(SystemSoundID(kSystemSoundID_Vibrate))
++    }
++    
++    fileprivate func clearView() {
++        pin = ""
++        pinIndicators.forEach { view in
++            view.isNeedClear = false
++            UIView.animate(withDuration: ALConstants.duration, animations: {
++                view.backgroundColor = .clear
++            })
++        }
++    }
++    
++    // MARK: - Touch ID / Face ID
++    fileprivate func checkSensors() {
++        guard mode == .validate || mode == .change || mode == .deactive else {return}
++        
++        let policy: LAPolicy = .deviceOwnerAuthenticationWithBiometrics
++        
++        var err: NSError?
++        // Check if the user is able to use the policy we've selected previously
++        guard context.canEvaluatePolicy(policy, error: &err) else {return}
++        
++        if #available(iOS 10.0, *) {
++            context.localizedCancelTitle = "Unlock with passcode"
++            context.localizedFallbackTitle = ""
++        } else {
++            context.localizedFallbackTitle = "Unlock with passcode"
++        }
++        // The user is able to use his/her Touch ID / Face ID 👍
++        context.evaluatePolicy(policy, localizedReason: ALConstants.kLocalizedReason, reply: { [weak self] success, error in
++            guard let self = self else { return }
++            DispatchQueue.main.async {
++                if success {
++                    if self.mode == .change {
++                        self.precreateSettings()
++                    } else if self.mode == .deactive {
++                        self.removePin()
++                    } else {
++                        self.dismiss(animated: true, completion: self.completion)
++                    }
++                } else if let error = error, error._code != LAError.authenticationFailed.rawValue {
++                    AppLocker.sensorCanceled = true
++                }
++            }
++        })
++    }
++    
++    // MARK: - Keyboard
++    @IBAction func keyboardPressed(_ sender: UIButton) {
++        switch sender.tag {
++        case ALConstants.button.delete.rawValue:
++            drawing(isNeedClear: true)
++        case ALConstants.button.cancel.rawValue:
++            clearView()
++            dismiss(animated: true, completion: self.completion)
++        default:
++            drawing(isNeedClear: false, tag: "\(sender.tag)")
++        }
++    }
++    
+ }
+ 
+ // MARK: - CAAnimationDelegate
+ extension AppLocker: CAAnimationDelegate {
+-  public func animationDidStop(_ anim: CAAnimation, finished flag: Bool) {
+-    clearView()
+-  }
++    public func animationDidStop(_ anim: CAAnimation, finished flag: Bool) {
++        clearView()
++    }
++}
++
++extension AppLocker: UIKeyInput {
++    public var hasText: Bool {
++        return self.pin.count > 0
++    }
++    
++    public func insertText(_ text: String) {
++        if text == "\n" { self.resignFirstResponder(); return }
++        drawing(isNeedClear: false, tag: text)
++    }
++    
++    public func deleteBackward() {
++        drawing(isNeedClear: true)
++    }
++    
++    public override var canBecomeFirstResponder: Bool { return pinCodeType == .alphanumeric }
++    
++    public var autocorrectionType: UITextAutocorrectionType { get { return .no } set { assertionFailure() } }
++    public var keyboardType: UIKeyboardType { get { return .namePhonePad } set { assertionFailure() } }
+ }
+ 
+ // MARK: - Present
+ public extension AppLocker {
+-  // Present AppLocker
+-  class func present(with mode: ALMode, and config: ALAppearance? = nil) {
+-    guard let root = UIApplication.shared.keyWindow?.rootViewController,
+-
+-      let locker = Bundle(for: self.classForCoder()).loadNibNamed(ALConstants.nibName, owner: self, options: nil)?.first as? AppLocker else {
+-        return
++    // Present AppLocker
++    class func present(with mode: ALMode, and config: ALAppearance? = nil, completion: (() -> ())? = nil, topMostViewControllerShouldBeDismissedCheck: ((UIViewController) -> Bool)? = nil) {
++        //Check if AppLocker viewController is in the stack of viewControllers, if it's, do not present it again
++        if var topController = UIApplication.shared.keyWindow?.rootViewController {
++            var shouldReturn = false
++            while let presentedViewController = topController.presentedViewController {
++                if presentedViewController.isKind(of: AppLocker.self) {
++                    shouldReturn = true
++                    break
++                }
++                topController = presentedViewController
++            }
++            if shouldReturn { return }
++        }
++        
++        //Determine if saved pin is Alphanumeric or Numeric
++        var pinType: PinCodeType = config?.pincodeType ?? .numeric
++        if let savedPin = AppLocker.savedPin, savedPin.count > 0, savedPin.rangeOfCharacter(from: CharacterSet.letters) != nil {
++            pinType = .alphanumeric
++        }
++        //Check if AppLocker view controller can be initiated
++        guard let root = UIApplication.shared.keyWindow?.rootViewController,
++            let locker = Bundle(for: self.classForCoder()).loadNibNamed(ALConstants.getNibName(forType: pinType), owner: self, options: nil)?.first as? AppLocker else {
++                return
++        }
++        AppLocker.sensorCanceled = false
++        locker.pinCodeType = pinType
++        locker.messageLabel.text = config?.title ?? ""
++        locker.messageLabel.textColor = config?.foregroundColor ?? .black
++        locker.submessageLabel.text = config?.subtitle ?? ""
++        locker.submessageLabel.textColor = config?.foregroundColor ?? .black
++        locker.view.backgroundColor = config?.backgroundColor ?? .white
++        locker.pinIndicators.forEach({ $0.highlightedBackgroundColor = config?.hightlightColor })
++        locker.cancelButton.setTitleColor(config?.foregroundColor ?? .black, for: .normal)
++        locker.mode = mode
++        locker.completion = completion
++        
++        if pinType == .numeric {
++            locker.pinNumbers.forEach({ $0.setTitleColor(config?.foregroundColor ?? .black, for: .normal); $0.setTitleColor(config?.hightlightColor ?? .white, for: .highlighted);
++                $0.setBackgroundColor(color: config?.hightlightColor ?? .white, forState: .highlighted) })
++            locker.deleteButton.setTitleColor(config?.foregroundColor ?? .black, for: .normal)
++        }
++        
++        if let image = config?.image {
++            locker.photoImageView.image = image
++        } else {
++            locker.photoImageView.isHidden = true
++        }
++        
++        locker.modalPresentationStyle = .overFullScreen
++        
++        let topMost = root.topMostViewController()
++        if let check = topMostViewControllerShouldBeDismissedCheck, check(topMost) {
++            topMost.dismiss(animated: false, completion: {
++                let topMost = root.topMostViewController()
++                topMost.present(locker, animated: true, completion: {
++                    if config?.isSensorsEnabled ?? false && !AppLocker.sensorCanceled {
++                        locker.checkSensors()
++                    }
++                })
++            })
++        } else {
++            topMost.present(locker, animated: true, completion: {
++                if config?.isSensorsEnabled ?? false && !AppLocker.sensorCanceled {
++                    locker.checkSensors()
++                }
++            })
++        }
+     }
+-    locker.messageLabel.text = config?.title ?? ""
+-    locker.submessageLabel.text = config?.subtitle ?? ""
+-    locker.view.backgroundColor = config?.color ?? .black
+-    locker.mode = mode
+     
+-    if config?.isSensorsEnabled ?? false {
+-      locker.checkSensors()
++    class func hasPinCode() -> Bool {
++        return AppLocker.valet.containsObject(forKey: ALConstants.kPincode)
+     }
+     
+-    if let image = config?.image {
+-      locker.photoImageView.image = image
+-    } else {
+-      locker.photoImageView.isHidden = true
++    class func deletePinCode() {
++        AppLocker.removePinFromValet()
+     }
+     
+-    root.present(locker, animated: true, completion: nil)
+-  }
++}
++
++extension UIViewController {
++    func topMostViewController() -> UIViewController {
++        
++        if let presented = self.presentedViewController {
++            return presented.topMostViewController()
++        }
++        
++        if let navigation = self as? UINavigationController {
++            return navigation.visibleViewController?.topMostViewController() ?? navigation
++        }
++        
++        if let tab = self as? UITabBarController {
++            return tab.selectedViewController?.topMostViewController() ?? tab
++        }
++        
++        return self
++    }
+ }
+--- Pods/AppLocker/Source/AppLocker/AppLocker.xib
++++ Pods/AppLocker/Source/AppLocker/AppLocker.xib
+@@ -1,20 +1,17 @@
+ <?xml version="1.0" encoding="UTF-8"?>
+-<document type="com.apple.InterfaceBuilder3.CocoaTouch.XIB" version="3.0" toolsVersion="14113" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" useTraitCollections="YES" colorMatched="YES">
++<document type="com.apple.InterfaceBuilder3.CocoaTouch.XIB" version="3.0" toolsVersion="14490.70" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" useTraitCollections="YES" colorMatched="YES">
+     <device id="retina4_7" orientation="portrait">
+         <adaptation id="fullscreen"/>
+     </device>
+     <dependencies>
+         <deployment identifier="iOS"/>
+-        <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="14088"/>
+-        <capability name="Alignment constraints with different attributes" minToolsVersion="5.1"/>
+-        <capability name="Aspect ratio constraints" minToolsVersion="5.1"/>
+-        <capability name="Constraints with non-1.0 multipliers" minToolsVersion="5.1"/>
++        <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="14490.49"/>
+         <capability name="documents saved in the Xcode 8 format" minToolsVersion="8.0"/>
+     </dependencies>
+     <objects>
+         <placeholder placeholderIdentifier="IBFilesOwner" id="-1" userLabel="File's Owner"/>
+         <placeholder placeholderIdentifier="IBFirstResponder" id="-2" customClass="UIResponder"/>
+-        <viewController id="eZb-O9-KwV" customClass="AppLocker" customModule="PasscodeLock" customModuleProvider="target">
++        <viewController id="eZb-O9-KwV" customClass="AppLocker" customModule="AppLocker" customModuleProvider="target">
+             <layoutGuides>
+                 <viewControllerLayoutGuide type="top" id="1Nd-Cx-bNb"/>
+                 <viewControllerLayoutGuide type="bottom" id="lR7-xf-1EX"/>
+@@ -26,26 +23,20 @@
+                     <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="O4o-Ks-4Ii">
+                         <rect key="frame" x="0.0" y="0.0" width="375" height="222.5"/>
+                         <subviews>
+-                            <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleToFill" horizontalHuggingPriority="251" verticalHuggingPriority="251" translatesAutoresizingMaskIntoConstraints="NO" id="hVx-18-l1J">
+-                                <rect key="frame" x="144" y="43.5" width="88" height="88.5"/>
+-                                <constraints>
+-                                    <constraint firstAttribute="width" secondItem="hVx-18-l1J" secondAttribute="height" multiplier="1:1" id="wcK-td-OD3"/>
+-                                </constraints>
+-                                <userDefinedRuntimeAttributes>
+-                                    <userDefinedRuntimeAttribute type="string" keyPath="accessibilityHint" value="kRoundKey"/>
+-                                </userDefinedRuntimeAttributes>
++                            <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFit" horizontalHuggingPriority="251" verticalHuggingPriority="251" translatesAutoresizingMaskIntoConstraints="NO" id="hVx-18-l1J">
++                                <rect key="frame" x="37.5" y="68" width="300" height="63.5"/>
+                             </imageView>
+                             <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Message" textAlignment="center" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="BiA-iv-5oK">
+-                                <rect key="frame" x="20" y="140" width="335" height="23"/>
++                                <rect key="frame" x="20" y="139.5" width="335" height="23"/>
+                                 <fontDescription key="fontDescription" type="system" weight="heavy" pointSize="19"/>
+                                 <color key="textColor" white="1" alpha="1" colorSpace="calibratedWhite"/>
+                                 <nil key="highlightedColor"/>
+                             </label>
+                             <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="6kS-ba-3rR">
+-                                <rect key="frame" x="8" y="199" width="359" height="27.5"/>
++                                <rect key="frame" x="8" y="199" width="359" height="28"/>
+                                 <subviews>
+-                                    <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="y48-OI-bV6" userLabel="first" customClass="Indicator" customModule="PasscodeLock" customModuleProvider="target">
+-                                        <rect key="frame" x="121" y="7" width="14" height="14"/>
++                                    <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="y48-OI-bV6" userLabel="first" customClass="Indicator" customModule="AppLocker" customModuleProvider="target">
++                                        <rect key="frame" x="121.5" y="7" width="14" height="14"/>
+                                         <color key="backgroundColor" white="0.0" alpha="0.0" colorSpace="calibratedWhite"/>
+                                         <constraints>
+                                             <constraint firstAttribute="width" secondItem="y48-OI-bV6" secondAttribute="height" multiplier="1:1" id="cHE-Dp-W1T"/>
+@@ -54,7 +45,7 @@
+                                             <userDefinedRuntimeAttribute type="string" keyPath="accessibilityHint" value="kRoundKey"/>
+                                         </userDefinedRuntimeAttributes>
+                                     </view>
+-                                    <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="EvL-fK-aNd" userLabel="second" customClass="Indicator" customModule="PasscodeLock" customModuleProvider="target">
++                                    <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="EvL-fK-aNd" userLabel="second" customClass="Indicator" customModule="AppLocker" customModuleProvider="target">
+                                         <rect key="frame" x="155.5" y="7" width="14" height="14"/>
+                                         <color key="backgroundColor" white="0.0" alpha="0.0" colorSpace="calibratedWhite"/>
+                                         <constraints>
+@@ -64,7 +55,7 @@
+                                             <userDefinedRuntimeAttribute type="string" keyPath="accessibilityHint" value="kRoundKey"/>
+                                         </userDefinedRuntimeAttributes>
+                                     </view>
+-                                    <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="ty0-rX-vyo" userLabel="third" customClass="Indicator" customModule="PasscodeLock" customModuleProvider="target">
++                                    <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="ty0-rX-vyo" userLabel="third" customClass="Indicator" customModule="AppLocker" customModuleProvider="target">
+                                         <rect key="frame" x="189.5" y="7" width="14" height="14"/>
+                                         <color key="backgroundColor" white="0.0" alpha="0.0" colorSpace="calibratedWhite"/>
+                                         <constraints>
+@@ -74,8 +65,8 @@
+                                             <userDefinedRuntimeAttribute type="string" keyPath="accessibilityHint" value="kRoundKey"/>
+                                         </userDefinedRuntimeAttributes>
+                                     </view>
+-                                    <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="nQv-Y6-U7g" userLabel="four" customClass="Indicator" customModule="PasscodeLock" customModuleProvider="target">
+-                                        <rect key="frame" x="223" y="7" width="14" height="14"/>
++                                    <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="nQv-Y6-U7g" userLabel="four" customClass="Indicator" customModule="AppLocker" customModuleProvider="target">
++                                        <rect key="frame" x="223.5" y="7" width="14" height="14"/>
+                                         <color key="backgroundColor" white="0.0" alpha="0.0" colorSpace="calibratedWhite"/>
+                                         <constraints>
+                                             <constraint firstAttribute="width" secondItem="nQv-Y6-U7g" secondAttribute="height" multiplier="1:1" id="XIl-Rp-NHx"/>
+@@ -110,6 +101,7 @@
+                         </subviews>
+                         <color key="backgroundColor" white="0.0" alpha="0.0" colorSpace="calibratedWhite"/>
+                         <constraints>
++                            <constraint firstItem="hVx-18-l1J" firstAttribute="top" secondItem="O4o-Ks-4Ii" secondAttribute="topMargin" constant="40" id="1kX-by-fuk"/>
+                             <constraint firstItem="hVx-18-l1J" firstAttribute="centerX" secondItem="O4o-Ks-4Ii" secondAttribute="centerX" id="4ph-gk-YLp"/>
+                             <constraint firstItem="6kS-ba-3rR" firstAttribute="height" secondItem="O4o-Ks-4Ii" secondAttribute="height" multiplier="1:8" id="5vT-yP-MeY"/>
+                             <constraint firstItem="BiA-iv-5oK" firstAttribute="centerX" secondItem="O4o-Ks-4Ii" secondAttribute="centerX" id="ABR-dq-2Dy"/>
+@@ -128,8 +120,8 @@
+                     <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="xRu-9U-A1v" userLabel="keyboard">
+                         <rect key="frame" x="0.0" y="222.5" width="375" height="444.5"/>
+                         <subviews>
+-                            <button opaque="NO" clipsSubviews="YES" tag="1" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="uxb-3y-6MP">
+-                                <rect key="frame" x="56" y="40.5" width="74.5" height="74.5"/>
++                            <button opaque="NO" clipsSubviews="YES" tag="1" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="uxb-3y-6MP" customClass="RoundedButton" customModule="AppLocker" customModuleProvider="target">
++                                <rect key="frame" x="55" y="40" width="75" height="75"/>
+                                 <fontDescription key="fontDescription" type="system" pointSize="25"/>
+                                 <state key="normal" title="1">
+                                     <color key="titleColor" white="1" alpha="1" colorSpace="calibratedWhite"/>
+@@ -144,8 +136,8 @@
+                                     <action selector="keyboardPressed:" destination="eZb-O9-KwV" eventType="touchUpInside" id="XYs-GF-s9W"/>
+                                 </connections>
+                             </button>
+-                            <button opaque="NO" clipsSubviews="YES" tag="2" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="HJZ-BT-9eb">
+-                                <rect key="frame" x="150.5" y="40.5" width="75" height="74.5"/>
++                            <button opaque="NO" clipsSubviews="YES" tag="2" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="HJZ-BT-9eb" customClass="RoundedButton" customModule="AppLocker" customModuleProvider="target">
++                                <rect key="frame" x="150" y="40" width="75" height="75"/>
+                                 <constraints>
+                                     <constraint firstAttribute="width" secondItem="HJZ-BT-9eb" secondAttribute="height" multiplier="1:1" id="1VR-Td-HwG"/>
+                                 </constraints>
+@@ -163,8 +155,8 @@
+                                     <action selector="keyboardPressed:" destination="eZb-O9-KwV" eventType="touchUpInside" id="vLv-Z7-c4R"/>
+                                 </connections>
+                             </button>
+-                            <button opaque="NO" clipsSubviews="YES" tag="3" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="cog-Nd-UYd">
+-                                <rect key="frame" x="245.5" y="40.5" width="74.5" height="74.5"/>
++                            <button opaque="NO" clipsSubviews="YES" tag="3" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="cog-Nd-UYd" customClass="RoundedButton" customModule="AppLocker" customModuleProvider="target">
++                                <rect key="frame" x="245" y="40" width="75" height="75"/>
+                                 <fontDescription key="fontDescription" type="system" pointSize="25"/>
+                                 <state key="normal" title="3">
+                                     <color key="titleColor" white="1" alpha="1" colorSpace="calibratedWhite"/>
+@@ -179,8 +171,8 @@
+                                     <action selector="keyboardPressed:" destination="eZb-O9-KwV" eventType="touchUpInside" id="kUY-ac-H1J"/>
+                                 </connections>
+                             </button>
+-                            <button opaque="NO" clipsSubviews="YES" tag="4" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="UJn-a6-MYe">
+-                                <rect key="frame" x="56" y="131.5" width="74.5" height="75"/>
++                            <button opaque="NO" clipsSubviews="YES" tag="4" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="UJn-a6-MYe" customClass="RoundedButton" customModule="AppLocker" customModuleProvider="target">
++                                <rect key="frame" x="55" y="131" width="75" height="75"/>
+                                 <fontDescription key="fontDescription" type="system" pointSize="25"/>
+                                 <state key="normal" title="4">
+                                     <color key="titleColor" white="1" alpha="1" colorSpace="calibratedWhite"/>
+@@ -195,8 +187,8 @@
+                                     <action selector="keyboardPressed:" destination="eZb-O9-KwV" eventType="touchUpInside" id="vVP-wW-7UM"/>
+                                 </connections>
+                             </button>
+-                            <button opaque="NO" clipsSubviews="YES" tag="5" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="sva-ss-Jmv">
+-                                <rect key="frame" x="150" y="131.5" width="75" height="75"/>
++                            <button opaque="NO" clipsSubviews="YES" tag="5" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="sva-ss-Jmv" customClass="RoundedButton" customModule="AppLocker" customModuleProvider="target">
++                                <rect key="frame" x="150" y="131" width="75" height="75"/>
+                                 <fontDescription key="fontDescription" type="system" pointSize="25"/>
+                                 <state key="normal" title="5">
+                                     <color key="titleColor" white="1" alpha="1" colorSpace="calibratedWhite"/>
+@@ -211,8 +203,8 @@
+                                     <action selector="keyboardPressed:" destination="eZb-O9-KwV" eventType="touchUpInside" id="4M3-s9-Shf"/>
+                                 </connections>
+                             </button>
+-                            <button opaque="NO" clipsSubviews="YES" tag="6" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="uve-ti-7ya">
+-                                <rect key="frame" x="245.5" y="131.5" width="74.5" height="75"/>
++                            <button opaque="NO" clipsSubviews="YES" tag="6" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="uve-ti-7ya" customClass="RoundedButton" customModule="AppLocker" customModuleProvider="target">
++                                <rect key="frame" x="245" y="131" width="75" height="75"/>
+                                 <fontDescription key="fontDescription" type="system" pointSize="25"/>
+                                 <state key="normal" title="6">
+                                     <color key="titleColor" white="1" alpha="1" colorSpace="calibratedWhite"/>
+@@ -227,8 +219,8 @@
+                                     <action selector="keyboardPressed:" destination="eZb-O9-KwV" eventType="touchUpInside" id="6ST-Wn-yxf"/>
+                                 </connections>
+                             </button>
+-                            <button opaque="NO" clipsSubviews="YES" tag="7" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="rAE-1L-zxN">
+-                                <rect key="frame" x="56" y="222.5" width="74.5" height="75"/>
++                            <button opaque="NO" clipsSubviews="YES" tag="7" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="rAE-1L-zxN" customClass="RoundedButton" customModule="AppLocker" customModuleProvider="target">
++                                <rect key="frame" x="55" y="222" width="75" height="75"/>
+                                 <fontDescription key="fontDescription" type="system" pointSize="25"/>
+                                 <state key="normal" title="7">
+                                     <color key="titleColor" white="1" alpha="1" colorSpace="calibratedWhite"/>
+@@ -243,8 +235,8 @@
+                                     <action selector="keyboardPressed:" destination="eZb-O9-KwV" eventType="touchUpInside" id="I4e-kV-iez"/>
+                                 </connections>
+                             </button>
+-                            <button opaque="NO" clipsSubviews="YES" tag="8" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="abq-s3-wbI">
+-                                <rect key="frame" x="150" y="222.5" width="75" height="75"/>
++                            <button opaque="NO" clipsSubviews="YES" tag="8" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="abq-s3-wbI" customClass="RoundedButton" customModule="AppLocker" customModuleProvider="target">
++                                <rect key="frame" x="150" y="222" width="75" height="75"/>
+                                 <fontDescription key="fontDescription" type="system" pointSize="25"/>
+                                 <state key="normal" title="8">
+                                     <color key="titleColor" white="1" alpha="1" colorSpace="calibratedWhite"/>
+@@ -259,8 +251,8 @@
+                                     <action selector="keyboardPressed:" destination="eZb-O9-KwV" eventType="touchUpInside" id="VeO-5Y-HF2"/>
+                                 </connections>
+                             </button>
+-                            <button opaque="NO" clipsSubviews="YES" tag="9" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="cKD-qE-N40">
+-                                <rect key="frame" x="245.5" y="222.5" width="74.5" height="75"/>
++                            <button opaque="NO" clipsSubviews="YES" tag="9" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="cKD-qE-N40" customClass="RoundedButton" customModule="AppLocker" customModuleProvider="target">
++                                <rect key="frame" x="245" y="222" width="75" height="75"/>
+                                 <fontDescription key="fontDescription" type="system" pointSize="25"/>
+                                 <state key="normal" title="9">
+                                     <color key="titleColor" white="1" alpha="1" colorSpace="calibratedWhite"/>
+@@ -276,7 +268,7 @@
+                                 </connections>
+                             </button>
+                             <button opaque="NO" clipsSubviews="YES" tag="1000" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="fEL-KO-vKM">
+-                                <rect key="frame" x="245" y="314" width="74.5" height="74.5"/>
++                                <rect key="frame" x="245" y="313" width="75" height="75"/>
+                                 <fontDescription key="fontDescription" type="system" pointSize="17"/>
+                                 <state key="normal" title="Delete">
+                                     <color key="titleColor" white="1" alpha="1" colorSpace="calibratedWhite"/>
+@@ -288,8 +280,8 @@
+                                     <action selector="keyboardPressed:" destination="eZb-O9-KwV" eventType="touchUpInside" id="LXj-tf-Iwj"/>
+                                 </connections>
+                             </button>
+-                            <button opaque="NO" clipsSubviews="YES" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="hQB-bP-FZg">
+-                                <rect key="frame" x="150" y="313.5" width="75" height="75"/>
++                            <button opaque="NO" clipsSubviews="YES" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="hQB-bP-FZg" customClass="RoundedButton" customModule="AppLocker" customModuleProvider="target">
++                                <rect key="frame" x="150" y="313" width="75" height="75"/>
+                                 <fontDescription key="fontDescription" type="system" pointSize="25"/>
+                                 <state key="normal" title="0">
+                                     <color key="titleColor" white="1" alpha="1" colorSpace="calibratedWhite"/>
+@@ -305,7 +297,7 @@
+                                 </connections>
+                             </button>
+                             <button opaque="NO" clipsSubviews="YES" tag="1001" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="roundedRect" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="CIU-9Q-OSg">
+-                                <rect key="frame" x="55.5" y="314" width="74.5" height="74.5"/>
++                                <rect key="frame" x="55" y="313" width="75" height="75"/>
+                                 <fontDescription key="fontDescription" type="system" pointSize="17"/>
+                                 <state key="normal" title="Cancel">
+                                     <color key="titleColor" white="1" alpha="1" colorSpace="calibratedWhite"/>
+@@ -379,13 +371,14 @@
+                     <constraint firstItem="O4o-Ks-4Ii" firstAttribute="top" secondItem="IOf-8m-rm3" secondAttribute="top" id="P6m-eY-Usf"/>
+                     <constraint firstAttribute="bottom" secondItem="xRu-9U-A1v" secondAttribute="bottom" id="gKj-fb-OZp"/>
+                     <constraint firstItem="xRu-9U-A1v" firstAttribute="top" secondItem="O4o-Ks-4Ii" secondAttribute="bottom" id="jWl-Y0-LxV"/>
+-                    <constraint firstItem="hVx-18-l1J" firstAttribute="width" secondItem="IOf-8m-rm3" secondAttribute="width" multiplier="1:4.25" id="sNw-8Z-NlU"/>
++                    <constraint firstItem="hVx-18-l1J" firstAttribute="width" secondItem="IOf-8m-rm3" secondAttribute="width" multiplier="1:1.25" id="sNw-8Z-NlU"/>
+                     <constraint firstAttribute="trailing" secondItem="O4o-Ks-4Ii" secondAttribute="trailing" id="xJg-Dp-gkv"/>
+                     <constraint firstItem="O4o-Ks-4Ii" firstAttribute="leading" secondItem="IOf-8m-rm3" secondAttribute="leading" id="xNr-xt-esq"/>
+                 </constraints>
+             </view>
+             <connections>
+                 <outlet property="cancelButton" destination="CIU-9Q-OSg" id="jph-Ge-Qt9"/>
++                <outlet property="deleteButton" destination="fEL-KO-vKM" id="244-qa-d6f"/>
+                 <outlet property="messageLabel" destination="BiA-iv-5oK" id="fdo-bX-80h"/>
+                 <outlet property="photoImageView" destination="hVx-18-l1J" id="gSk-Zu-Xoe"/>
+                 <outlet property="submessageLabel" destination="9Yc-zm-CFr" id="7n3-e4-K6m"/>
+@@ -393,6 +386,16 @@
+                 <outletCollection property="pinIndicators" destination="EvL-fK-aNd" collectionClass="NSMutableArray" id="BFG-Uv-9tX"/>
+                 <outletCollection property="pinIndicators" destination="ty0-rX-vyo" collectionClass="NSMutableArray" id="evP-lU-FiQ"/>
+                 <outletCollection property="pinIndicators" destination="nQv-Y6-U7g" collectionClass="NSMutableArray" id="jYB-cR-2wD"/>
++                <outletCollection property="pinNumbers" destination="uxb-3y-6MP" collectionClass="NSMutableArray" id="4ll-Tr-1N9"/>
++                <outletCollection property="pinNumbers" destination="HJZ-BT-9eb" collectionClass="NSMutableArray" id="7Xf-qf-nH4"/>
++                <outletCollection property="pinNumbers" destination="cog-Nd-UYd" collectionClass="NSMutableArray" id="eKK-W6-aCi"/>
++                <outletCollection property="pinNumbers" destination="UJn-a6-MYe" collectionClass="NSMutableArray" id="HxU-VJ-rcW"/>
++                <outletCollection property="pinNumbers" destination="sva-ss-Jmv" collectionClass="NSMutableArray" id="MWf-Au-JV8"/>
++                <outletCollection property="pinNumbers" destination="uve-ti-7ya" collectionClass="NSMutableArray" id="pvj-5n-lvE"/>
++                <outletCollection property="pinNumbers" destination="rAE-1L-zxN" collectionClass="NSMutableArray" id="beD-Ol-EKj"/>
++                <outletCollection property="pinNumbers" destination="abq-s3-wbI" collectionClass="NSMutableArray" id="EIM-q1-8Jd"/>
++                <outletCollection property="pinNumbers" destination="cKD-qE-N40" collectionClass="NSMutableArray" id="y02-OI-G1h"/>
++                <outletCollection property="pinNumbers" destination="hQB-bP-FZg" collectionClass="NSMutableArray" id="rZD-Cz-zqR"/>
+             </connections>
+             <point key="canvasLocation" x="-212.5" y="-162.5"/>
+         </viewController>
+diff -ru applocker-orig/Source/UI.swift applocker/Source/UI.swift
+--- Pods/AppLocker/Source/UI.swift
++++ Pods/AppLocker/Source/UI.swift
+@@ -10,6 +10,28 @@
+ 
+ class Indicator: UIView {
+     var isNeedClear = false
++    var highlightedBackgroundColor: UIColor? = .white
++}
++
++class RoundedButton: UIButton {
++    override func layoutSubviews() {
++        super.layoutSubviews()
++        round()
++    }
++    
++    /// Sets the background color to use for the specified button state.
++    func setBackgroundColor(color: UIColor, forState: UIControlState) {
++        let minimumSize: CGSize = CGSize(width: 1.0, height: 1.0)
++        UIGraphicsBeginImageContext(minimumSize)
++        if let context = UIGraphicsGetCurrentContext() {
++            context.setFillColor(color.cgColor)
++            context.fill(CGRect(origin: .zero, size: minimumSize))
++        }
++        let colorImage = UIGraphicsGetImageFromCurrentImageContext()
++        UIGraphicsEndImageContext()
++        self.clipsToBounds = true
++        self.setBackgroundImage(colorImage, for: forState)
++    }
+ }
+ 
+ let kRoundKey = "kRoundKey"
+@@ -23,7 +45,7 @@
+         guard self.accessibilityHint == kRoundKey else {return}
+         layer.cornerRadius = frame.height/2
+         layer.borderWidth = 1
+-        layer.borderColor = UIColor.lightGray.cgColor
++        layer.borderColor = UIColor.orange.cgColor
+     }
+ }
+ 
