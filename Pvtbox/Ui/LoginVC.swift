@@ -164,11 +164,15 @@ class LoginVC: UIViewController, UITextFieldDelegate, UIDocumentInteractionContr
             emailController?.setErrorText(Strings.emailWrong, errorAccessibilityValue: nil)
             return
         }
-        var host = selfHosted.isHidden ? nil : selfHosted.text?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if host?.isEmpty ?? true {
-            host = nil
+        if var host = selfHosted.isHidden ? nil : selfHosted.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !host.isEmpty {
+            if !host.starts(with: "https://") {
+                host = "https://" + host
+            }
+            PreferenceService.host = host
+        } else {
+            PreferenceService.host = Const.serverAddress
         }
-        PreferenceService.host = host ?? Const.serverAddress
         
         UIApplication.shared.beginIgnoringInteractionEvents()
         actionButton.setTitle(Strings.pleaseWait, for: .normal)
@@ -192,10 +196,17 @@ class LoginVC: UIViewController, UITextFieldDelegate, UIDocumentInteractionContr
         UIApplication.shared.beginIgnoringInteractionEvents()
         
         let (isValid, email, password, host) = validate()
+        if var host = host, !host.isEmpty {
+            if !host.starts(with: "https://") {
+                host = "https://" + host
+            }
+            PreferenceService.host = host
+        } else {
+            PreferenceService.host = Const.serverAddress
+        }
         if email != nil {
             PreferenceService.email = email
         }
-        PreferenceService.host = host ?? Const.serverAddress
         if !isValid {
             UIApplication.shared.endIgnoringInteractionEvents()
             return

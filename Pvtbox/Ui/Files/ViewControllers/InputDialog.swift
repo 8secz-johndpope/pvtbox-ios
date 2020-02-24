@@ -228,7 +228,9 @@ class InputDialog: UIViewController {
             guard let url = URL(string: input),
                 ["https", "http"].contains(url.scheme),
                 let host = url.host,
-                host.lowercased() == "pvtbox.net",
+                let ownUrl = URL(string: PreferenceService.host),
+                let ownHost = ownUrl.host,
+                host.lowercased() == ownHost.lowercased(),
                 url.pathComponents.count == 3,
                 url.lastPathComponent.count == 32 else {
                 return Strings.linkInvalid
